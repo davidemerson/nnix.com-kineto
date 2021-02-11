@@ -3,6 +3,6 @@ FROM golang:latest
  COPY go.mod go.sum ./
  RUN go mod download
  COPY . .
- RUN go build -o main .
+ RUN go build -o kineto .
  EXPOSE 8080
-CMD ["./kineto", "gemini://idf.looting.uk/"]
+CMD ["kineto", "gemini://idf.looting.uk/"]
