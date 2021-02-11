@@ -8,8 +8,8 @@ FROM golang:1.15.8-alpine
 WORKDIR /src
 
 # Copy and download dependency using go mod
-COPY go.mod .
-COPY go.sum .
+COPY src/go.mod .
+COPY src/go.sum .
 RUN go mod download
 
 # Copy the code into the container
