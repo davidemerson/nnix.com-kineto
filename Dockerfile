@@ -5,4 +5,4 @@ FROM golang:latest
  COPY . .
  RUN go build -o main .
  EXPOSE 8080
- ENTRYPOINT kineto gemini://idf.looting.uk/
+CMD ["./kineto", "gemini://idf.looting.uk/"]
