@@ -5,11 +5,11 @@ FROM golang:1.15.8-alpine
 #    GOOS=linux \
 #    GOARCH=amd64
 
-WORKDIR /build
+WORKDIR /src
 
 # Copy and download dependency using go mod
-COPY src/go.mod .
-COPY src/go.sum .
+COPY go.mod .
+COPY go.sum .
 RUN go mod download
 
 # Copy the code into the container
@@ -22,7 +22,7 @@ RUN go build -o main .
 WORKDIR /dist
 
 # Copy binary from build to main folder
-RUN cp /build/main .
+RUN cp /src/main .
 
 # Export necessary port
 EXPOSE 8080
