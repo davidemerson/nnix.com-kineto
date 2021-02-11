@@ -5,8 +5,6 @@ FROM golang:1.15.8-alpine
 #    GOOS=linux \
 #    GOARCH=amd64
 
-WORKDIR /src
-
 # Copy and download dependency using go mod
 COPY src/go.mod .
 COPY src/go.sum .
@@ -16,7 +14,7 @@ RUN go mod download
 COPY . .
 
 # Build the application
-RUN go build -o main .
+RUN go build .
 
 # Move to /dist directory as the place for resulting binary folder
 WORKDIR /dist
