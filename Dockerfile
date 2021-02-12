@@ -5,4 +5,4 @@ FROM golang:latest
  COPY . .
  RUN go build -o kineto .
  EXPOSE 8080
-CMD ["/app/kineto", "gemini://idf.looting.uk/"]
+CMD ["/app/kineto", "gemini://nnix.com"]
