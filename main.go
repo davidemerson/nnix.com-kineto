@@ -195,7 +195,7 @@ var gemtextPage = template.Must(template.
 </article>
 <details>
 	<summary>
-		Proxied content from <a href="{{.URL.String | safeURL}}">{{.URL.String}}</a>
+		Proxied content from <a href="{{.URL.String | safeURL}}">{{.URL.String}}</a> - get a <a href=https://gmi.skyjake.fi/lagrange/>proper gemini browser</a> and visit!
 		{{if .External}}
 		(external content)
 		{{end}}
