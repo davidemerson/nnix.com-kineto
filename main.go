@@ -195,8 +195,9 @@ var gemtextPage = template.Must(template.
 </article>
 <details>
 	<summary>
-		Proxied content from <a href="{{.URL.String | safeURL}}">{{.URL.String}}</a> - get a <a href=https://gmi.skyjake.fi/lagrange/>proper gemini browser</a> and visit!
-		<a href='https://webring.xxiivv.com/#random' target='_blank'><img src="https://webring.xxiivv.com/icon.black.svg" alt="merveilles webring" width="50"/></a>
+		Proxied content from <a href="{{.URL.String | safeURL}}">{{.URL.String}}</a>.
+		<br>Get a <a href=https://gmi.skyjake.fi/lagrange/>proper gemini browser</a> and visit!
+		<br><a href='https://webring.xxiivv.com/#random' target='_blank'><img src="https://webring.xxiivv.com/icon.white.svg" alt="merveilles webring" width="50"/></a>
 		{{if .External}}
 		(external content)
 		{{end}}
