@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"html/template"
 	"io"
+	"io/ioutil"
 	"log"
 	"mime"
 	"net/http"
@@ -125,12 +127,16 @@ var gemtextPage = template.Must(template.
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 {{- if .CSS }}
+{{- if .ExternalCSS }}
+<link rel="stylesheet" type="text/css" href="{{.CSS | safeCSS}}">
+{{- else }}
 <style>
 {{.CSS | safeCSS}}
 </style>
 {{- end }}
+{{- end }}
 <title>{{.Title}}</title>
-<article>
+<article{{if .Lang}} lang="{{.Lang}}"{{end}}>
 	{{ $ctx := . -}}
 	{{- $isList := false -}}
 	{{- range .Lines -}}
@@ -229,9 +235,13 @@ var inputPage = template.Must(template.
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 {{- if .CSS }}
+{{- if .ExternalCSS }}
+<link rel="stylesheet" type="text/css" href="{{.CSS | safeCSS}}">
+{{- else }}
 <style>
 {{.CSS | safeCSS}}
 </style>
+{{- end }}
 {{- end }}
 <title>{{.Prompt}}</title>
 <form method="POST">
@@ -326,7 +336,7 @@ dl dt:not(:first-child) {
 	pre {
 		background-color: #222;
 	}
-	
+
 	a {
 		color: #0087BD;
 	}
@@ -359,21 +369,24 @@ input:focus {
 `
 
 type GemtextContext struct {
-	CSS      string
-	External bool
-	Lines    []gemini.Line
-	Pre      int
-	Resp     *gemini.Response
-	Title    string
-	URL      *url.URL
-	Root     *url.URL
+	CSS         string
+	ExternalCSS bool
+	External    bool
+	Lines       []gemini.Line
+	Pre         int
+	Resp        *gemini.Response
+	Title       string
+	Lang        string
+	URL         *url.URL
+	Root        *url.URL
 }
 
 type InputContext struct {
-	CSS    string
-	Prompt string
-	Secret bool
-	URL    *url.URL
+	CSS         string
+	ExternalCSS bool
+	Prompt      string
+	Secret      bool
+	URL         *url.URL
 }
 
 type GemtextHeading struct {
@@ -382,16 +395,13 @@ type GemtextHeading struct {
 }
 
 func proxyGemini(req gemini.Request, external bool, root *url.URL,
-	w http.ResponseWriter, r *http.Request) {
-	client := gemini.Client{
-		Timeout: 30 * time.Second,
-	}
+	w http.ResponseWriter, r *http.Request, css string, externalCSS bool) {
 
-	if h := (url.URL{Host: req.Host}); h.Port() == "" {
-		req.Host += ":1965"
-	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
 
-	resp, err := client.Do(&req)
+	client := gemini.Client{}
+	resp, err := client.Do(ctx, &req)
 	if err != nil {
 		w.WriteHeader(http.StatusBadGateway)
 		fmt.Fprintf(w, "Gateway error: %v", err)
@@ -403,10 +413,11 @@ func proxyGemini(req gemini.Request, external bool, root *url.URL,
 	case 10, 11:
 		w.Header().Add("Content-Type", "text/html")
 		err = inputPage.Execute(w, &InputContext{
-			CSS:    defaultCSS,
-			Prompt: resp.Meta,
-			Secret: resp.Status == 11,
-			URL:    req.URL,
+			CSS:         css,
+			ExternalCSS: externalCSS,
+			Prompt:      resp.Meta,
+			Secret:      resp.Status == 11,
+			URL:         req.URL,
 		})
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -419,22 +430,22 @@ func proxyGemini(req gemini.Request, external bool, root *url.URL,
 		to, err := url.Parse(resp.Meta)
 		if err != nil {
 			w.WriteHeader(http.StatusBadGateway)
-			w.Write([]byte(fmt.Sprintf("Gateway error: bad redirect %v", err)))
+			fmt.Fprintf(w, "Gateway error: bad redirect: %v", err)
 		}
 		next := req.URL.ResolveReference(to)
 		if next.Scheme != "gemini" {
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(fmt.Sprintf("This page is redirecting you to %s", next.String())))
+			fmt.Fprintf(w, "This page is redirecting you to %s", next)
 			return
 		}
-		next.Host = r.URL.Host
 		if external {
 			next.Path = fmt.Sprintf("/x/%s/%s", next.Host, next.Path)
 		}
+		next.Host = r.URL.Host
 		next.Scheme = r.URL.Scheme
 		w.Header().Add("Location", next.String())
 		w.WriteHeader(http.StatusFound)
-		w.Write([]byte("Redirecting to " + next.String()))
+		fmt.Fprintf(w, "Redirecting to %s", next)
 		return
 	case 40, 41, 42, 43, 44:
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -454,12 +465,10 @@ func proxyGemini(req gemini.Request, external bool, root *url.URL,
 		return
 	}
 
-	// XXX: We could use the params I guess
-	m, _, err := mime.ParseMediaType(resp.Meta)
+	m, params, err := mime.ParseMediaType(resp.Meta)
 	if err != nil {
 		w.WriteHeader(http.StatusBadGateway)
-		w.Write([]byte(fmt.Sprintf("Gateway error: %d %s: %v",
-			resp.Status, resp.Meta, err)))
+		fmt.Fprintf(w, "Gateway error: %d %s: %v", resp.Status, resp.Meta, err)
 		return
 	}
 
@@ -469,28 +478,41 @@ func proxyGemini(req gemini.Request, external bool, root *url.URL,
 		return
 	}
 
+	if charset, ok := params["charset"]; ok {
+		charset = strings.ToLower(charset)
+		if charset != "utf-8" {
+			w.WriteHeader(http.StatusNotImplemented)
+			fmt.Fprintf(w, "Unsupported charset: %s", charset)
+			return
+		}
+	}
+
+	lang := params["lang"]
+
 	w.Header().Add("Content-Type", "text/html")
-	ctx := &GemtextContext{
-		CSS:      defaultCSS,
-		External: external,
-		Resp:     resp,
-		Title:    req.URL.Host + " " + req.URL.Path,
-		URL:      req.URL,
-		Root:     root,
+	gemctx := &GemtextContext{
+		CSS:         css,
+		ExternalCSS: externalCSS,
+		External:    external,
+		Resp:        resp,
+		Title:       req.URL.Host + " " + req.URL.Path,
+		Lang:        lang,
+		URL:         req.URL,
+		Root:        root,
 	}
 
 	var title bool
 	gemini.ParseLines(resp.Body, func(line gemini.Line) {
-		ctx.Lines = append(ctx.Lines, line)
+		gemctx.Lines = append(gemctx.Lines, line)
 		if !title {
 			if h, ok := line.(gemini.LineHeading1); ok {
-				ctx.Title = string(h)
+				gemctx.Title = string(h)
 				title = true
 			}
 		}
 	})
 
-	err = gemtextPage.Execute(w, ctx)
+	err = gemtextPage.Execute(w, gemctx)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "%v", err)
@@ -500,10 +522,12 @@ func proxyGemini(req gemini.Request, external bool, root *url.URL,
 
 func main() {
 	var (
-		bind string = ":8080"
+		bind     string = ":8080"
+		css      string = defaultCSS
+		external bool   = false
 	)
 
-	opts, optind, err := getopt.Getopts(os.Args, "b:c:")
+	opts, optind, err := getopt.Getopts(os.Args, "b:c:s:e:")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -511,6 +535,17 @@ func main() {
 		switch opt.Option {
 		case 'b':
 			bind = opt.Value
+		case 's':
+			external = false
+			cssContent, err := ioutil.ReadFile(opt.Value)
+			if err == nil {
+				css = string(cssContent)
+			} else {
+				log.Fatalf("Error opening custom CSS from '%s': %v", opt.Value, err)
+			}
+		case 'e':
+			external = true
+			css = opt.Value
 		}
 	}
 
@@ -555,12 +590,24 @@ func main() {
 		req.URL.Scheme = root.Scheme
 		req.URL.Host = root.Host
 		req.URL.Path = r.URL.Path
-		req.Host = root.Host
 		req.URL.RawQuery = r.URL.RawQuery
-		proxyGemini(req, false, root, w, r)
+		proxyGemini(req, false, root, w, r, css, external)
 	}))
 
 	http.Handle("/x/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			r.ParseForm()
+			if q, ok := r.Form["q"]; !ok {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte("Bad request"))
+			} else {
+				w.Header().Add("Location", "?"+q[0])
+				w.WriteHeader(http.StatusFound)
+				w.Write([]byte("Redirecting"))
+			}
+			return
+		}
+
 		if r.Method != "GET" {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			w.Write([]byte("404 Not found"))
@@ -572,15 +619,13 @@ func main() {
 			path = append(path, "")
 		}
 		req := gemini.Request{}
-		req.URL, err = url.Parse(fmt.Sprintf("gemini://%s/%s", path[2], path[3]))
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(fmt.Sprintf("Error: %v", err)))
-			return
-		}
-		req.Host = path[2]
-		log.Printf("%s (external) %s%s", r.Method, path[2], path[3])
-		proxyGemini(req, true, root, w, r)
+		req.URL = &url.URL{}
+		req.URL.Scheme = "gemini"
+		req.URL.Host = path[2]
+		req.URL.Path = "/" + path[3]
+		req.URL.RawQuery = r.URL.RawQuery
+		log.Printf("%s (external) %s%s", r.Method, r.URL.Host, r.URL.Path)
+		proxyGemini(req, true, root, w, r, css, external)
 	}))
 
 	log.Printf("HTTP server listening on %s", bind)
